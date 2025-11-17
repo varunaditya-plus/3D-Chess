@@ -1,9 +1,11 @@
+'use client'
+
 import { useState } from 'react'
 import { Canvas } from '@react-three/fiber'
-import Board from './components/board'
-import { PreloadPieces } from './components/pieces'
+import Board from '../components/board'
+import { PreloadPieces } from '../components/pieces'
 
-function App() {
+export default function Home() {
   const [isPanned, setIsPanned] = useState(false)
   return (
     <>
@@ -20,4 +22,3 @@ function App() {
   )
 }
 
-export default App
