@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useRef } from 'react'
 import * as THREE from 'three'
 import { useGLTF } from '@react-three/drei'
-import { useFrame } from '@react-three/fiber'
 
 export const backRowOrder = ['rook', 'knight', 'bishop', 'queen', 'king', 'bishop', 'knight', 'rook']
 
@@ -10,8 +9,6 @@ export function ChessPiece({ type, color, position, scale = 0.5, onClick, onPoin
   const clonedScene = useMemo(() => scene.clone(), [scene])
   const materialRef = useRef(null)
   const groupRef = useRef(null)
-  const targetPosition = useRef(new THREE.Vector3(...position))
-  const currentPosition = useRef(new THREE.Vector3(...position))
 
   useEffect(() => {
     const material = new THREE.MeshStandardMaterial({
@@ -31,24 +28,10 @@ export function ChessPiece({ type, color, position, scale = 0.5, onClick, onPoin
   }, [clonedScene, color])
 
   useEffect(() => {
-    targetPosition.current.set(...position)
-  }, [position])
-
-  useEffect(() => {
     if (groupRef.current) {
-      groupRef.current.position.copy(targetPosition.current)
-      currentPosition.current.copy(targetPosition.current)
+      groupRef.current.position.set(...position)
     }
-  }, [])
-
-  useFrame(() => {
-    if (!groupRef.current) { return }
-    currentPosition.current.lerp(targetPosition.current, 0.2)
-    if (currentPosition.current.distanceTo(targetPosition.current) < 0.001) {
-      currentPosition.current.copy(targetPosition.current)
-    }
-    groupRef.current.position.copy(currentPosition.current)
-  })
+  }, [position])
 
   return (
     <group ref={groupRef} scale={scale} rotation={[0, 0, 0]} onPointerDown={onPointerDown} onClick={onClick} onPointerOver={onPointerOver} onPointerOut={onPointerOut}>

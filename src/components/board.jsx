@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import * as THREE from 'three'
-import { useThree } from '@react-three/fiber'
+import { useThree, useFrame } from '@react-three/fiber'
 import { CameraControls } from '@react-three/drei'
 import { ChessPiece, backRowOrder } from './pieces'
 import { pieceMoveGenerators } from './pieces/moves'
@@ -107,13 +107,61 @@ function Grid3D() {
   )
 }
 
-function Board() {
+function Board({ onPanChange }) {
   const [pieces, setPieces] = useState(() => buildInitialPieces())
   const [selectedPieceId, setSelectedPieceId] = useState(null)
   const [availableMoves, setAvailableMoves] = useState([])
   const gl = useThree(state => state.gl)
+  const camera = useThree(state => state.camera)
+  const cameraControlsRef = useRef(null)
   const isDraggingRef = useRef(false)
   const pointerDownPosRef = useRef(null)
+  const wasPannedRef = useRef(false)
+  const initialPositionRef = useRef([10, 14, 10])
+  
+  const boxCenter = useMemo(() => {
+    const xCenter = 0 // Middle of board (-3.5 to 3.5)
+    const zCenter = 0 // Middle of board (-3.5 to 3.5)
+    const yCenter = (layerHeights[0] + layerHeights[layerHeights.length - 1]) / 2 // Middle of layers
+    return [xCenter, yCenter, zCenter]
+  }, [])
+
+  useEffect(() => {
+    if (cameraControlsRef.current) {
+      const controls = cameraControlsRef.current
+      controls.setTarget(...boxCenter)
+      initialPositionRef.current = [camera.position.x, camera.position.y, camera.position.z]
+      controls.mouseButtons.middle = 2 // PAN
+      controls.mouseButtons.right = 2 // PAN
+    }
+  }, [camera, boxCenter])
+
+  useFrame(() => {
+    if (cameraControlsRef.current && onPanChange) {
+      const target = cameraControlsRef.current.getTarget(new THREE.Vector3())
+      const isPanned = Math.abs(target.x - boxCenter[0]) > 0.01 || Math.abs(target.y - boxCenter[1]) > 0.01 || Math.abs(target.z - boxCenter[2]) > 0.01
+      if (isPanned !== wasPannedRef.current) {
+        wasPannedRef.current = isPanned
+        onPanChange(isPanned)
+      }
+    }
+  })
+
+  useEffect(() => {
+    const handleKeyPress = (e) => {
+      if (e.key === 'c' || e.key === 'C') {
+        if (cameraControlsRef.current) {
+          const controls = cameraControlsRef.current
+          controls.setTarget(...boxCenter)
+          controls.setLookAt(...initialPositionRef.current, ...boxCenter, true)
+          wasPannedRef.current = false
+          if (onPanChange) onPanChange(false)
+        }
+      }
+    }
+    window.addEventListener('keydown', handleKeyPress)
+    return () => window.removeEventListener('keydown', handleKeyPress)
+  }, [onPanChange, boxCenter])
 
   const checkerTexture = useMemo(() => {
     const canvas = document.createElement('canvas')
@@ -273,11 +321,18 @@ function Board() {
         )
       })}
       <CameraControls
+        ref={cameraControlsRef}
         minDistance={6}
         maxDistance={30}
         polarRotateSpeed={0.8}
         azimuthRotateSpeed={0.8}
         dollySpeed={0.8}
+        panSpeed={0.8}
+        touches={{
+          one: 0, // ROTATE
+          two: 2, // PAN
+          three: 1, // DOLLY
+        }}
       />
     </>
   )
