@@ -1,98 +1,119 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import * as THREE from 'three'
 import { useThree } from '@react-three/fiber'
 import { CameraControls } from '@react-three/drei'
 import { ChessPiece, backRowOrder } from './pieces'
+import { pieceMoveGenerators } from './pieces/moves'
+import { createOccupancyMap } from './pieces/utils'
 
 const layerHeights = Array.from({ length: 8 }, (_, i) => -3.5 + i)
+const boardSize = 8
+let pieceIdCounter = 0
 
-function CheckerLayer({ height, index, isActive, onSelect, texture }) {
-  const [isHovered, setIsHovered] = useState(false)
-  const pointerDownRef = useRef(null)
-  const outlineGeometry = useMemo(() => {
-    const geo = new THREE.PlaneGeometry(8, 8, 1, 1)
-    const edges = new THREE.EdgesGeometry(geo)
-    geo.dispose()
-    return edges
-  }, [])
-  const hoverGeometry = useMemo(() => {
-    const size = 8
-    const divisions = 8
-    const half = size / 2
-    const step = size / divisions
-    const positions = []
+const createPiece = (type, color, row, col, layer = 0) => ({ id: `${color}-${type}-${pieceIdCounter += 1}`, type, color, row, col, layer })
 
-    for (let i = 0; i <= divisions; i += 1) {
-      const k = -half + i * step
-      positions.push(-half, k, 0, half, k, 0)
-      positions.push(k, -half, 0, k, half, 0)
-    }
+const buildInitialPieces = () => {
+  const pieces = []
+  backRowOrder.forEach((type, col) => {
+    pieces.push(createPiece(type, 'white', 0, col))
+    pieces.push(createPiece(type, 'brown', 7, col))
+  })
+  for (let col = 0; col < boardSize; col += 1) {
+    pieces.push(createPiece('pawn', 'white', 1, col))
+    pieces.push(createPiece('pawn', 'brown', 6, col))
+  }
+  return pieces
+}
 
-    const geometry = new THREE.BufferGeometry()
-    geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3))
-    return geometry
-  }, [])
+const getWorldPosition = ({ layer, row, col }) => {
+  const x = -3.5 + col
+  const z = -3.5 + row
+  const clampedLayer = Math.max(0, Math.min(layerHeights.length - 1, layer))
+  const y = layerHeights[clampedLayer] + 0.01
+  return [x, y, z]
+}
 
-  useEffect(
-    () => () => {
-      outlineGeometry.dispose()
-      hoverGeometry.dispose()
-    },
-    [outlineGeometry, hoverGeometry],
-  )
-
+function CheckerLayer({ height, texture, showChecker }) {
   return (
     <group position={[0, height, 0]} rotation={[-Math.PI / 2, 0, 0]}>
-      <mesh
-        onPointerDown={e => {
-          pointerDownRef.current = { x: e.clientX, y: e.clientY }
-        }}
-        onClick={e => {
-          e.stopPropagation()
-          if (pointerDownRef.current) {
-            const dx = Math.abs(e.clientX - pointerDownRef.current.x)
-            const dy = Math.abs(e.clientY - pointerDownRef.current.y)
-            const dragThreshold = 5
-            if (dx < dragThreshold && dy < dragThreshold) { onSelect(index) }
-            pointerDownRef.current = null
-          }
-        }}
-        onPointerOver={e => {
-          e.stopPropagation()
-          document.body.style.cursor = 'pointer'
-          setIsHovered(true)
-        }}
-        onPointerOut={e => {
-          e.stopPropagation()
-          document.body.style.cursor = 'default'
-          setIsHovered(false)
-        }}
-      >
-        <planeGeometry args={[8, 8]} />
-        <meshBasicMaterial visible={false} side={THREE.DoubleSide} />
-      </mesh>
-
-      {isActive ? (
-        <mesh>
+      {showChecker ? (
+        <mesh raycast={null}>
           <planeGeometry args={[8, 8, 8, 8]} />
           <meshStandardMaterial map={texture} transparent opacity={1} roughness={0.5} metalness={0.1} side={THREE.DoubleSide} />
         </mesh>
-      ) : isHovered ? (
-        <lineSegments geometry={hoverGeometry}>
-          <lineBasicMaterial color="#f5f5f5" transparent opacity={0.4} />
-        </lineSegments>
-      ) : (
-        <lineSegments geometry={outlineGeometry}>
-          <lineBasicMaterial color="#f5f5f5" transparent opacity={0.5} />
-        </lineSegments>
-      )}
+      ) : null}
     </group>
   )
 }
 
+function Grid3D() {
+  const geometry = useMemo(() => {
+    const gridSize = 8
+    const halfSize = gridSize / 2
+    const topY = layerHeights[7] + 1
+    const positions = []
+
+    // Grid lines in X direction (along Z axis, varying Y)
+    for (let layer = 0; layer < 8; layer += 1) {
+      const y = layerHeights[layer]
+      for (let row = 0; row <= 8; row += 1) {
+        const z = -halfSize + (row * gridSize / 8)
+        positions.push(-halfSize, y, z, halfSize, y, z)
+      }
+    }
+
+    for (let row = 0; row <= 8; row += 1) {
+      const z = -halfSize + (row * gridSize / 8)
+      positions.push(-halfSize, topY, z, halfSize, topY, z)
+    }
+
+    // Grid lines in Z direction (along X axis, varying Y)
+    for (let layer = 0; layer < 8; layer += 1) {
+      const y = layerHeights[layer]
+      for (let col = 0; col <= 8; col += 1) {
+        const x = -halfSize + (col * gridSize / 8)
+        positions.push(x, y, -halfSize, x, y, halfSize)
+      }
+    }
+
+    for (let col = 0; col <= 8; col += 1) {
+      const x = -halfSize + (col * gridSize / 8)
+      positions.push(x, topY, -halfSize, x, topY, halfSize)
+    }
+
+    // Vertical lines (along Y axis)
+    for (let row = 0; row <= 8; row += 1) {
+      const z = -halfSize + (row * gridSize / 8)
+      for (let col = 0; col <= 8; col += 1) {
+        const x = -halfSize + (col * gridSize / 8)
+        positions.push(x, layerHeights[0], z, x, topY, z)
+      }
+    }
+
+    const geo = new THREE.BufferGeometry()
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3))
+    return geo
+  }, [])
+
+  useEffect(
+    () => () => { geometry.dispose() },
+    [geometry],
+  )
+
+  return (
+    <lineSegments geometry={geometry} raycast={null}>
+      <lineBasicMaterial color="#f5f5f5" transparent opacity={0.15} />
+    </lineSegments>
+  )
+}
+
 function Board() {
-  const [activeLayer, setActiveLayer] = useState(0)
+  const [pieces, setPieces] = useState(() => buildInitialPieces())
+  const [selectedPieceId, setSelectedPieceId] = useState(null)
+  const [availableMoves, setAvailableMoves] = useState([])
   const gl = useThree(state => state.gl)
+  const isDraggingRef = useRef(false)
+  const pointerDownPosRef = useRef(null)
 
   const checkerTexture = useMemo(() => {
     const canvas = document.createElement('canvas')
@@ -119,68 +140,138 @@ function Board() {
     [checkerTexture],
   )
 
-  const handleSelect = index => {
-    setActiveLayer(prev => (prev === index ? null : index))
-  }
-
-  const bottomLayerHeight = layerHeights[0]
-
-  const getSquarePosition = (row, col) => {
-    const x = -3.5 + col
-    const z = -3.5 + row
-    return [x, bottomLayerHeight + 0.01, z]
-  }
-
   const getPieceScale = type => (type === 'rook' ? 0.6 : 0.5) // rook model is a bit smaller than the rest
+
+  const occupancy = useMemo(() => createOccupancyMap(pieces), [pieces])
+
+  const handlePiecePointerOver = useCallback(event => {
+    event.stopPropagation()
+    document.body.style.cursor = 'pointer'
+  }, [])
+
+  const handlePiecePointerOut = useCallback(event => {
+    event.stopPropagation()
+    document.body.style.cursor = 'default'
+  }, [])
+
+  const handlePiecePointerDown = useCallback(event => {
+    event.stopPropagation()
+    isDraggingRef.current = false
+    pointerDownPosRef.current = { x: event.clientX, y: event.clientY }
+  }, [])
+
+  useEffect(() => {
+    const handlePointerMove = (e) => {
+      if (pointerDownPosRef.current) {
+        const dx = e.clientX - pointerDownPosRef.current.x
+        const dy = e.clientY - pointerDownPosRef.current.y
+        if (Math.sqrt(dx * dx + dy * dy) > 5) {
+          isDraggingRef.current = true
+        }
+      }
+    }
+    const handlePointerUp = () => {
+      pointerDownPosRef.current = null
+    }
+    window.addEventListener('pointermove', handlePointerMove)
+    window.addEventListener('pointerup', handlePointerUp)
+    return () => {
+      window.removeEventListener('pointermove', handlePointerMove)
+      window.removeEventListener('pointerup', handlePointerUp)
+    }
+  }, [])
+
+  const handlePieceClick = useCallback(
+    (event, piece) => {
+      event.stopPropagation()
+      if (isDraggingRef.current) {
+        isDraggingRef.current = false
+        return
+      }
+      if (selectedPieceId === piece.id) {
+        setSelectedPieceId(null)
+        setAvailableMoves([])
+        return
+      }
+      const generator = pieceMoveGenerators[piece.type]
+      if (!generator) {
+        setSelectedPieceId(null)
+        setAvailableMoves([])
+        return
+      }
+      const moves = generator(piece, occupancy)
+      setSelectedPieceId(piece.id)
+      setAvailableMoves(moves)
+    },
+    [occupancy, selectedPieceId],
+  )
+
+  const handleMoveSelection = useCallback(
+    (event, targetPosition) => {
+      event.stopPropagation()
+      setPieces(prevPieces => {
+        const movingPiece = prevPieces.find(piece => piece.id === selectedPieceId)
+        if (!movingPiece) { return prevPieces }
+        const withoutMoving = prevPieces.filter(piece => piece.id !== movingPiece.id)
+        const withoutCaptured = withoutMoving.filter(
+          piece => !(piece.layer === targetPosition.layer && piece.row === targetPosition.row && piece.col === targetPosition.col),
+        )
+        return [...withoutCaptured, { ...movingPiece, ...targetPosition }]
+      })
+      setSelectedPieceId(null)
+      setAvailableMoves([])
+      document.body.style.cursor = 'default'
+    },
+    [selectedPieceId],
+  )
 
   return (
     <>
       <ambientLight intensity={0.6} />
       <directionalLight position={[10, 12, 6]} intensity={1} />
+      <Grid3D />
       {layerHeights.map((height, idx) => (
         <CheckerLayer
           key={height}
           height={height}
-          index={idx}
-          isActive={activeLayer === idx}
-          onSelect={handleSelect}
           texture={checkerTexture}
+          showChecker={idx === 0}
         />
       ))}
-      {backRowOrder.map((type, col) => (
+      {pieces.map(piece => (
         <ChessPiece
-          key={`white-${type}-${col}`}
-          type={type}
-          color="white"
-          position={getSquarePosition(0, col)}
-          scale={getPieceScale(type)}
+          key={piece.id}
+          type={piece.type}
+          color={piece.color}
+          position={getWorldPosition(piece)}
+          scale={getPieceScale(piece.type)}
+          onPointerOver={handlePiecePointerOver}
+          onPointerOut={handlePiecePointerOut}
+          onPointerDown={handlePiecePointerDown}
+          onClick={event => handlePieceClick(event, piece)}
         />
       ))}
-      {Array.from({ length: 8 }, (_, col) => (
-        <ChessPiece
-          key={`white-pawn-${col}`}
-          type="pawn"
-          color="white"
-          position={getSquarePosition(1, col)}
-        />
-      ))}
-      {backRowOrder.map((type, col) => (
-        <ChessPiece
-          key={`brown-${type}-${col}`}
-          type={type}
-          color="brown"
-          position={getSquarePosition(7, col)}
-          scale={getPieceScale(type)}
-        />
-      ))}
-      {Array.from({ length: 8 }, (_, col) => (
-        <ChessPiece
-          key={`brown-pawn-${col}`}
-          type="pawn"
-          color="brown"
-          position={getSquarePosition(6, col)}
-        />
-      ))}
+      {availableMoves.map(move => {
+        const [x, y, z] = getWorldPosition(move)
+        return (
+          <mesh
+            key={`move-${move.layer}-${move.row}-${move.col}`}
+            position={[x, y + 0.3, z]}
+            onClick={event => handleMoveSelection(event, move)}
+            onPointerOver={event => {
+              event.stopPropagation()
+              document.body.style.cursor = 'pointer'
+            }}
+            onPointerOut={event => {
+              event.stopPropagation()
+              document.body.style.cursor = 'default'
+            }}
+          >
+            <sphereGeometry args={[0.12, 24, 24]} />
+            <meshStandardMaterial color="#6ee7ff" emissive="#46c5ff" emissiveIntensity={0.6} transparent opacity={0.9} />
+          </mesh>
+        )
+      })}
       <CameraControls
         minDistance={6}
         maxDistance={30}
